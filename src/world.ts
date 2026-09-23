@@ -3,16 +3,16 @@
  *
  * Output goes through four tools that drive the pet page (bubble, options, walking,
  * expressions and motions). Input arrives as events: speech heard through the pet window's
- * microphone (transcribed by Windows' own recognizer or whisper.cpp), typed text, answers to `pet_ask`, and touches
+ * microphone (transcribed by SenseVoice Small or Windows' recognizer), typed text, answers to `pet_ask`, and touches
  * (poke, petting, being thrown). The page reports what actually happened; receipts and
  * events state only that.
  *
  * Processes owned here: the page server (always, while mounted), the pet window (when
  * `window.enabled`), the system recognizer's helper (voice input on, engine `system`) and the
- * managed whisper.cpp server (voice input on, engine `whisper`, nothing else answering at the endpoint).
+ * SenseVoice Small CLI (one process per completed utterance when selected).
  */
 import type { spawn } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import type {
@@ -23,16 +23,16 @@ import type { Language } from 'cortico/core/language.ts';
 import type { DeepPartial } from 'cortico/world.ts';
 import {
   DESKTOP_PET_ASR_CONFIG_GROUP, DESKTOP_PET_CONFIG_GROUP, DESKTOP_PET_ID,
-  type AsrEngine, type DesktopPetConfigSection, type MicMode, type PetSkin, type PetTheme, type RoamMode, type WhisperModel,
+  type AsrEngine, type DesktopPetConfigSection, type MicMode, type PetSkin, type PetTheme, type RoamMode,
 } from './config.ts';
 import { PetServer, type PageMessage } from './server.ts';
 import { WindowHost, resolveHostCommand } from './window-host.ts';
-import { RuntimeStore, WHISPER_MODELS, type ArtifactState } from './runtime/store.ts';
-import { WhisperServer, type WhisperServerState } from './asr/whisper-server.ts';
+import { RuntimeStore, SENSEVOICE_MODEL, type ArtifactState } from './runtime/store.ts';
+import { SenseVoiceRecognizer, type SenseVoiceState } from './asr/sensevoice.ts';
 import { SystemRecognizer, systemRecognizerSupported, type SystemRecognizerState, type SystemSentence } from './asr/system-recognizer.ts';
 import { Packer, Segmenter, rmsDb, type SegmentConfig, type SegmentSink, type Utterance } from './asr/segmenter.ts';
 import { hotkeyLabel, parseHotkey, watchHotkey, type KeyWatcher } from './asr/hotkey.ts';
-import { looksHallucinated, transcribe } from './asr/client.ts';
+import { looksHallucinated, type TranscribeResult } from './asr/client.ts';
 import { toSimplified } from './asr/simplify.ts';
 import { estimateSeconds, parseActions, parseScript, vocabTable } from './script.ts';
 import { DESKTOP_PET_TOOL_DECLS } from './tools.ts';
@@ -89,6 +89,8 @@ export interface DesktopPetWorldOptions {
   watchHotkey?: typeof watchHotkey;
   /** Starts the system recognizer's helper; tests pass a fake. */
   spawnSystemRecognizer?: typeof spawn;
+  /** Supplies recognition in microphone-flow tests. */
+  recognizeSenseVoice?: (pcm: Int16Array, sampleRate: number) => Promise<TranscribeResult>;
 }
 
 interface PendingWalk {
@@ -131,10 +133,10 @@ export class DesktopPetWorld implements World {
   private readonly server: PetServer;
   private windowHost: WindowHost | null = null;
   private readonly store: RuntimeStore;
-  private whisper: WhisperServer | null = null;
+  private sensevoice: SenseVoiceRecognizer | null = null;
   private system: SystemRecognizer | null = null;
   /** The engine the running backend belongs to; a config change starts the other one. */
-  private runningEngine: 'system' | 'whisper' | null = null;
+  private runningEngine: AsrEngine | null = null;
   /** The person asked to send what was heard now, without waiting for the pause that ends a sentence. */
   private committing = false;
   private readonly segmenter: Segmenter;
@@ -193,13 +195,11 @@ export class DesktopPetWorld implements World {
     await this.server.start();
     this.windowHost = new WindowHost(host.log);
     if (this.cfg.window.enabled) this.openWindow();
-    this.whisper = new WhisperServer({
-      baseUrl: () => this.cfg.asr.baseUrl,
-      launch: () => this.whisperLaunch(),
-      language: () => this.cfg.asr.language,
-      threads: () => this.cfg.asr.threads,
-      log: host.log,
-      fetchImpl: this.opts.fetchImpl,
+    this.sensevoice = new SenseVoiceRecognizer({
+      launch: () => this.senseVoiceLaunch(),
+      temporaryRoot: () => join(this.opts.runtimesRoot(), 'sensevoice-input'),
+      timeoutMs: () => this.cfg.asr.timeoutMs,
+      recognize: this.opts.recognizeSenseVoice,
     });
     this.system = new SystemRecognizer({
       language: () => this.cfg.asr.language,
@@ -229,7 +229,7 @@ export class DesktopPetWorld implements World {
     for (const s of this.voiceSockets) s.close('stopped');
     this.voiceSockets.clear();
     await this.windowHost?.stop();
-    await this.whisper?.stop();
+    this.sensevoice?.stop();
     await this.system?.stop();
     await this.server.stop();
     this.host = null;
@@ -322,13 +322,13 @@ export class DesktopPetWorld implements World {
 
   private micWanted(): boolean {
     const phase = this.backendState()?.phase;
-    return this.cfg.asr.enabled && (phase === 'running' || phase === 'external');
+    return this.cfg.asr.enabled && phase === 'running';
   }
 
   /** What the pet's microphone button shows: switched on, able to hear, and why not. */
   private voiceBrief(): Record<string, unknown> {
     const b = this.backendState();
-    const ready = b?.phase === 'running' || b?.phase === 'external';
+    const ready = b?.phase === 'running';
     return {
       enabled: this.cfg.asr.enabled,
       ready,
@@ -515,48 +515,41 @@ export class DesktopPetWorld implements World {
 
   /* ---------- voice ---------- */
 
-  private whisperLaunch(): { exe: string; model: string } | { missing: string } {
-    const exe = this.cfg.asr.serverFile || this.store.whisper.executable();
-    if (!exe) return { missing: '没有 whisper.cpp 服务程序:在语音输入面板安装,或在配置里指定' };
-    const modelState = this.store.model(this.cfg.asr.model).state();
+  private senseVoiceLaunch(): { exe: string; model: string } | { missing: string } {
+    const exe = this.cfg.asr.runtimeFile || this.store.sensevoice.executable();
+    if (!exe) return { missing: '没有 SenseVoice 程序：在语音输入面板下载，或在配置里指定' };
+    const modelState = this.store.model.state();
     const model = this.cfg.asr.modelFile || (modelState.phase === 'ready' ? modelState.path : '');
-    if (!model) return { missing: `没有识别模型 ${WHISPER_MODELS[this.cfg.asr.model].file}:在语音输入面板下载` };
+    if (!model) return { missing: `没有识别模型 ${SENSEVOICE_MODEL.file}：在语音输入面板下载` };
     return { exe, model };
   }
 
-  /** The engine in force: `auto` is Windows' own recognizer on Windows and whisper elsewhere. */
-  engine(): 'system' | 'whisper' {
-    const e: AsrEngine = this.cfg.asr.engine;
-    if (e === 'system' || e === 'whisper') return e;
-    return systemRecognizerSupported() ? 'system' : 'whisper';
+  engine(): AsrEngine {
+    return this.cfg.asr.engine;
   }
 
-  private backendState(): WhisperServerState | SystemRecognizerState | null {
-    return (this.engine() === 'system' ? this.system?.state() : this.whisper?.state()) ?? null;
+  private backendState(): SenseVoiceState | SystemRecognizerState | null {
+    return (this.engine() === 'system' ? this.system?.state() : this.sensevoice?.state()) ?? null;
   }
 
-  /**
-   * Starts the engine in force and stops the other one. whisper.cpp starts only when asked
-   * `explicitly` (the panel's start button), when `manageServer` is on, or when something
-   * already answers at the endpoint.
-   */
-  async startVoiceBackend(explicitly = false): Promise<WhisperServerState | SystemRecognizerState | null> {
-    if (!this.whisper || !this.system) return null;
+  /** Starts the selected recognizer and stops the other one. */
+  async startVoiceBackend(): Promise<SenseVoiceState | SystemRecognizerState | null> {
+    if (!this.sensevoice || !this.system) return null;
     const engine = this.engine();
     if (this.runningEngine !== engine) {
       if (this.runningEngine === 'system') await this.system.stop();
-      else if (this.runningEngine === 'whisper') await this.whisper.stop();
+      else if (this.runningEngine === 'sensevoice') this.sensevoice.stop();
       this.runningEngine = engine;
     }
     if (engine === 'system') await this.system.start();
-    else if (explicitly || this.cfg.asr.manageServer || await this.whisper.reachable()) await this.whisper.start();
+    else this.sensevoice.start();
     this.syncPrefs();
     return this.backendState();
   }
 
   private async stopVoiceBackend(): Promise<void> {
     if (this.engine() === 'system') await this.system?.stop();
-    else await this.whisper?.stop();
+    else this.sensevoice?.stop();
     this.syncPrefs();
   }
 
@@ -681,10 +674,7 @@ export class DesktopPetWorld implements World {
           ? await u.result
           : this.engine() === 'system' && this.system
             ? await this.system.transcribe(u.pcm)
-            : await transcribe(u.pcm, SAMPLE_RATE, {
-              baseUrl: this.cfg.asr.baseUrl, model: WHISPER_MODELS[this.cfg.asr.model].file, language: this.cfg.asr.language,
-              timeoutMs: this.cfg.asr.timeoutMs, fetchImpl: this.opts.fetchImpl,
-            });
+            : await this.sensevoice!.transcribe(u.pcm, SAMPLE_RATE);
         let text = res.text;
         if (this.cfg.asr.simplified) text = toSimplified(text);
         if (res.error || looksHallucinated(text)) {
@@ -907,7 +897,7 @@ export class DesktopPetWorld implements World {
       },
       {
         label: '语音识别',
-        state: !this.cfg.asr.enabled ? 'offline' : v?.phase === 'running' || v?.phase === 'external' ? 'online' : v?.phase === 'starting' ? 'loading' : v?.phase === 'error' ? 'error' : 'offline',
+        state: !this.cfg.asr.enabled ? 'offline' : v?.phase === 'running' ? 'online' : v?.phase === 'starting' ? 'loading' : v?.phase === 'error' ? 'error' : 'offline',
         hint: v?.detail ?? v?.phase ?? '未启动',
       },
     ];
@@ -951,16 +941,14 @@ export class DesktopPetWorld implements World {
       switch (method) {
         case 'state': return this.voiceState();
         case 'install': {
-          const model = (typeof args[0] === 'string' && args[0] in WHISPER_MODELS ? args[0] : this.cfg.asr.model) as WhisperModel;
-          if (model !== this.cfg.asr.model) this.opts.persist({ asr: { model } });
-          void this.installVoice(model);
+          void this.installVoice();
           return this.voiceState();
         }
-        case 'start': await this.startVoiceBackend(true); return this.voiceState();
+        case 'start': await this.startVoiceBackend(); return this.voiceState();
         case 'stop': await this.stopVoiceBackend(); return this.voiceState();
         case 'setEngine': {
           const engine = args[0];
-          if (engine === 'auto' || engine === 'system' || engine === 'whisper') this.opts.persist({ asr: { engine } });
+          if (engine === 'system' || engine === 'sensevoice') this.opts.persist({ asr: { engine } });
           if (this.cfg.asr.enabled) await this.startVoiceBackend();
           return this.voiceState();
         }
@@ -975,16 +963,14 @@ export class DesktopPetWorld implements World {
     throw new Error(`未知方法 ${panel}.${method}`);
   }
 
-  /** Downloads what voice input still lacks, then starts the server. */
-  async installVoice(model: WhisperModel = this.cfg.asr.model): Promise<void> {
+  /** Downloads SenseVoice Small and starts it when voice input is enabled. */
+  async installVoice(): Promise<void> {
     const jobs: Promise<void>[] = [];
-    if (!this.cfg.asr.serverFile && this.store.whisper.state().phase !== 'ready') jobs.push(this.store.whisper.install());
-    if (!this.cfg.asr.modelFile && this.store.model(model).state().phase !== 'ready') jobs.push(this.store.model(model).install());
+    if (!this.cfg.asr.runtimeFile && this.store.sensevoice.state().phase !== 'ready') jobs.push(this.store.sensevoice.install());
+    if (!this.cfg.asr.modelFile && this.store.model.state().phase !== 'ready') jobs.push(this.store.model.install());
     await Promise.all(jobs);
-    // downloading whisper is choosing it
-    if (this.engine() !== 'whisper') this.opts.persist({ asr: { engine: 'whisper' } });
-    if (this.cfg.asr.enabled && this.cfg.asr.manageServer) {
-      await this.whisper?.stop();
+    if (this.cfg.asr.enabled && this.engine() === 'sensevoice') {
+      this.sensevoice?.stop();
       await this.startVoiceBackend();
     }
   }
@@ -1001,18 +987,22 @@ export class DesktopPetWorld implements World {
   }
 
   voiceState(): Record<string, unknown> {
-    const models = Object.fromEntries(
-      (Object.keys(WHISPER_MODELS) as WhisperModel[]).map((m) => [m, { ...this.store.model(m).state(), bytes: WHISPER_MODELS[m].bytes }]),
-    ) as Record<string, ArtifactState & { bytes: number }>;
+    const customState = (path: string, label: string): ArtifactState => {
+      const ready = existsSync(path);
+      return { phase: ready ? 'ready' : 'error', path, done: 0, total: null, detail: ready ? null : `${label}不存在：${path}` };
+    };
+    const runtime = this.cfg.asr.runtimeFile
+      ? customState(this.cfg.asr.runtimeFile, 'SenseVoice 程序') : this.store.sensevoice.state();
+    const model = this.cfg.asr.modelFile
+      ? customState(this.cfg.asr.modelFile, 'SenseVoice 模型') : this.store.model.state();
     return {
       enabled: this.cfg.asr.enabled,
       engine: this.engine(),
       engineSetting: this.cfg.asr.engine,
       systemSupported: systemRecognizerSupported(),
-      model: this.cfg.asr.model,
       server: this.backendState(),
-      runtime: { ...this.store.whisper.state(), supported: this.store.whisper.supported || !!this.cfg.asr.serverFile },
-      models,
+      runtime: { ...runtime, supported: this.store.sensevoice.supported || !!this.cfg.asr.runtimeFile, custom: !!this.cfg.asr.runtimeFile },
+      model: { ...model, bytes: SENSEVOICE_MODEL.bytes, custom: !!this.cfg.asr.modelFile },
       mic: this.micState,
       input: {
         ...this.cfg.asr.mic,

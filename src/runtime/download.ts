@@ -12,7 +12,13 @@ export interface DownloadOptions {
 
 export async function downloadFile(url: string, dest: string, options: DownloadOptions = {}): Promise<void> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const res = await fetchImpl(url, { signal: options.signal, redirect: 'follow' });
+  let res: Response;
+  try {
+    res = await fetchImpl(url, { signal: options.signal, redirect: 'follow' });
+  } catch (error) {
+    const cause = (error as Error & { cause?: Error }).cause;
+    throw new Error(`${new URL(url).hostname}: ${cause?.message ?? (error as Error).message}`);
+  }
   if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
   const length = Number(res.headers.get('content-length'));
   const total = Number.isFinite(length) && length > 0 ? length : null;

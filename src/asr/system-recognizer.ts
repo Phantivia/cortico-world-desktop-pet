@@ -5,7 +5,7 @@
  * shows what it hears before the sentence ends.
  *
  * Nothing to download: every Windows has System.Speech, and a Chinese Windows has the zh-CN
- * recognizer. It is less accurate than whisper.cpp's small model, which stays the upgrade.
+ * recognizer. SenseVoice Small is available as an optional engine.
  *
  * The script goes in through `-EncodedCommand`, so neither the execution policy nor the
  * console code page touches it; its output escapes everything outside ASCII for the same reason.
@@ -22,7 +22,7 @@ export type SystemPhase = 'stopped' | 'starting' | 'running' | 'error';
 
 export interface SystemRecognizerState {
   phase: SystemPhase;
-  /** What the panel shows where the whisper server shows its URL. */
+  /** What the panel shows as the recognizer location. */
   url: string;
   pid: number | null;
   detail: string | null;

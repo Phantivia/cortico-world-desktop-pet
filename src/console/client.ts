@@ -1,13 +1,13 @@
 /**
  * Console panels for the desktop pet: `pet` (window, dressing, window runtime) and `voice`
- * (recognition engine, whisper.cpp downloads when that engine is chosen, microphone level,
+ * (recognition engine, SenseVoice Small downloads, microphone level,
  * recognized lines). Data goes
  * through `ctx.invoke`, the level meter through `ctx.stream('voice')`.
  */
 import type { ConsoleClientBundle, ConsolePanel, ConsolePanelContext } from 'cortico/web/shared/client-panel.ts';
 import './style.css';
 
-interface Artifact { phase: 'absent' | 'working' | 'ready' | 'error'; path: string; done: number; total: number | null; detail: string | null }
+interface Artifact { phase: 'absent' | 'working' | 'ready' | 'error'; path: string; done: number; total: number | null; detail: string | null; custom?: boolean }
 interface PetState {
   connected: boolean;
   url: string | null;
@@ -19,13 +19,12 @@ interface PetState {
 interface VoiceState {
   enabled: boolean;
   /** The engine in force, and the setting it came from */
-  engine: 'system' | 'whisper';
+  engine: Engine;
   engineSetting: Engine;
   systemSupported: boolean;
-  model: string;
+  model: Artifact & { bytes: number };
   server: { phase: string; url: string; pid: number | null; detail: string | null } | null;
   runtime: Artifact & { supported: boolean };
-  models: Record<string, Artifact & { bytes: number }>;
   mic: { state: string; detail: string | null };
   input: {
     mode: MicMode;
@@ -46,7 +45,7 @@ interface VoiceState {
 }
 
 type MicMode = 'hold' | 'toggle' | 'always';
-type Engine = 'auto' | 'system' | 'whisper';
+type Engine = 'sensevoice' | 'system';
 const MODES: Record<MicMode, string> = { hold: '按住说话键时收音', toggle: '按一下说话键开始,再按一下停', always: '一直收音' };
 
 /** `KeyboardEvent.code` → the key names `src/asr/hotkey.ts` reads. */
@@ -178,10 +177,9 @@ const voicePanel: ConsolePanel = {
     const btnStop = ui.button('停止', { size: 'sm' });
     srv.acts.append(btnStop, btnStart);
 
-    const rt = statusRow(ctx, 'whisper.cpp');
-    const modelSel = ui.select();
+    const rt = statusRow(ctx, 'SenseVoice Small');
     const btnInstall = ui.button('下载并启动', { size: 'sm', variant: 'primary' });
-    rt.acts.append(modelSel, btnInstall);
+    rt.acts.append(btnInstall);
 
     const micRow = statusRow(ctx, '麦克风');
     const deviceSel = ui.select();
@@ -213,17 +211,16 @@ const voicePanel: ConsolePanel = {
         : '已关闭:不打开麦克风,下面的设置暂不生效';
       settings.classList.toggle('off', !next.enabled);
       const engines: Record<Engine, string> = {
-        auto: `自动(${next.systemSupported ? 'Windows 自带' : 'whisper.cpp'})`,
         system: next.systemSupported ? 'Windows 自带' : 'Windows 自带(本系统没有)',
-        whisper: 'whisper.cpp',
+        sensevoice: 'SenseVoice Small',
       };
       if (engineSel.dataset.list !== JSON.stringify(engines)) {
         engineSel.dataset.list = JSON.stringify(engines);
         engineSel.replaceChildren(...(Object.keys(engines) as Engine[]).map((k) => { const o = ui.h('option', null, engines[k]); o.value = k; return o; }));
       }
       if (document.activeElement !== engineSel) engineSel.value = next.engineSetting;
-      eng.set(next.engine === 'system' ? 'Windows 自带' : 'whisper.cpp', 'on',
-        next.engine === 'system' ? '不用下载,开箱即用;想要更准可以换 whisper.cpp' : '要下载识别程序和模型,中文更准');
+      eng.set(next.engine === 'system' ? 'Windows 自带' : 'SenseVoice Small', 'on',
+        next.engine === 'system' ? '使用 Windows 已安装的识别器' : '本地运行，需要约 5 MB 程序和 243 MB 模型');
       const sv = next.server;
       if (!sv) srv.set('—', 'off');
       else if (sv.phase === 'running') srv.set(next.engine === 'system' ? '就绪' : '运行中', 'on', sv.url);
@@ -234,21 +231,15 @@ const voicePanel: ConsolePanel = {
       btnStart.disabled = sv?.phase === 'running' || sv?.phase === 'starting';
       btnStop.disabled = sv?.phase !== 'running';
 
-      const keys = Object.keys(next.models);
-      if (modelSel.options.length !== keys.length) {
-        modelSel.replaceChildren(...keys.map((k) => { const o = ui.h('option', null, `${k}(${MB(next.models[k].bytes)})`); o.value = k; return o; }));
-      }
-      if (document.activeElement !== modelSel) modelSel.value = next.model;
-      const r = next.runtime, m = next.models[modelSel.value] ?? next.models[next.model];
-      const busy = r.phase === 'working' || m?.phase === 'working';
-      if (busy) rt.set('下载中', 'busy', [r.phase === 'working' ? `程序 ${progress(r)}` : '', m?.phase === 'working' ? `模型 ${progress(m)}` : ''].filter(Boolean).join(' · '));
-      else if (r.phase === 'error' || m?.phase === 'error') rt.set('下载失败', 'bad', r.detail ?? m?.detail ?? '');
-      else if (r.phase === 'ready' && m?.phase === 'ready') rt.set('已就绪', 'on', m.path);
-      else rt.set(r.supported ? '缺文件' : '本平台没有预编译包', 'off', r.supported ? [r.phase !== 'ready' ? '程序 8 MB' : '', m?.phase !== 'ready' ? `模型 ${MB(m?.bytes ?? 0)}` : ''].filter(Boolean).join(' + ') : '在配置里指定 whisper-server 程序');
+      const r = next.runtime, m = next.model;
+      const busy = r.phase === 'working' || m.phase === 'working';
+      if (busy) rt.set('下载中', 'busy', [r.phase === 'working' ? `程序 ${progress(r)}` : '', m.phase === 'working' ? `模型 ${progress(m)}` : ''].filter(Boolean).join(' · '));
+      else if (r.phase === 'error' || m.phase === 'error') rt.set('下载失败', 'bad', r.detail ?? m.detail ?? '');
+      else if (r.phase === 'ready' && m.phase === 'ready') rt.set('已就绪', 'on', m.path);
+      else rt.set(r.supported ? '缺文件' : '本平台没有预编译包', 'off', r.supported ? [r.phase !== 'ready' ? '程序 5 MB' : '', m.phase !== 'ready' ? `模型 ${MB(m.bytes)}` : ''].filter(Boolean).join(' + ') : '在配置里指定 SenseVoice 程序');
       btnInstall.disabled = busy;
-      btnInstall.hidden = r.phase === 'ready' && m?.phase === 'ready';
-      // the download only matters to whisper
-      rt.row.style.display = next.engine === 'whisper' ? '' : 'none';
+      btnInstall.hidden = (r.custom || r.phase === 'ready') && (m.custom || m.phase === 'ready');
+      rt.row.style.display = next.engine === 'sensevoice' ? '' : 'none';
 
       const mic = next.mic;
       micRow.set({ on: '收音中', off: '没在收', denied: '被拒绝', error: '出错' }[mic.state] ?? mic.state, mic.state === 'on' ? 'on' : mic.state === 'off' ? 'off' : 'bad', mic.detail ?? '');
@@ -281,7 +272,7 @@ const voicePanel: ConsolePanel = {
     btnStart.addEventListener('click', call('start'));
     engineSel.addEventListener('change', () => void call('setEngine', [engineSel.value])());
     btnStop.addEventListener('click', call('stop'));
-    btnInstall.addEventListener('click', () => void call('install', [modelSel.value])());
+    btnInstall.addEventListener('click', call('install'));
     modeSel.addEventListener('change', () => void call('setMic', [{ mode: modeSel.value }])());
     deviceSel.addEventListener('change', () => void call('setMic', [{ deviceId: deviceSel.value }])());
 

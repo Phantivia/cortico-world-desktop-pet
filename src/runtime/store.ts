@@ -1,19 +1,16 @@
 /**
- * Managed downloads: the whisper.cpp server, its ggml models, and the Electron runtime that
+ * Managed downloads: SenseVoice Small, its GGUF model, and the Electron runtime that
  * hosts the pet window. Every artifact is pinned to a version. Files land at
  * `<CORTICO_HOME>/runtimes/<id>/<version>/` and `<CORTICO_HOME>/models/desktop-pet/`, are
- * written to `.partial` first and renamed into place when complete; models are checked
- * against the SHA-256 their repository publishes.
+ * written to `.partial` first and renamed into place when complete.
  *
  * Archives are unpacked with the system `tar` (bsdtar on Windows and macOS reads zip too);
  * Linux zips go through `unzip`.
  */
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { createReadStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { downloadFile, type DownloadOptions } from './download.ts';
-import type { WhisperModel } from '../config.ts';
 
 export type Phase = 'absent' | 'working' | 'ready' | 'error';
 
@@ -28,26 +25,22 @@ export interface ArtifactState {
 
 const platformKey = (): string => `${process.platform}-${process.arch}`;
 
-export const WHISPER_RUNTIME = {
-  id: 'whisper.cpp',
-  version: 'b5130',
+export const SENSEVOICE_RUNTIME = {
+  id: 'sensevoice',
+  version: 'v1.4.16',
   assets: {
-    'win32-x64': { file: 'whisper-bin-x64.zip', bytes: 8_573_270 },
-    'win32-arm64': { file: 'whisper-bin-win-cpu-arm64.zip', bytes: 4_361_895 },
-    'linux-x64': { file: 'whisper-bin-ubuntu-x64.tar.gz', bytes: 9_793_438 },
-    'linux-arm64': { file: 'whisper-bin-ubuntu-arm64.tar.gz', bytes: 4_605_905 },
+    'win32-x64': { file: 'funasr-llamacpp-windows-x64.zip', bytes: 4_967_457 },
+    'linux-x64': { file: 'funasr-llamacpp-linux-x64.tar.gz', bytes: 8_014_474 },
+    'linux-arm64': { file: 'funasr-llamacpp-linux-arm64.tar.gz', bytes: 7_979_504 },
+    'darwin-arm64': { file: 'funasr-llamacpp-macos-arm64.tar.gz', bytes: 7_358_022 },
   } as Record<string, { file: string; bytes: number }>,
-  url: (file: string) => `https://github.com/ggml-org/whisper.cpp/releases/download/b5130/${file}`,
-  executable: process.platform === 'win32' ? 'whisper-server.exe' : 'whisper-server',
+  url: (file: string) => `https://github.com/modelscope/FunASR/releases/download/v1.4.16/${file}`,
+  executable: process.platform === 'win32' ? 'llama-funasr-sensevoice.exe' : 'llama-funasr-sensevoice',
 } as const;
 
-const WHISPER_MODEL_REVISION = '5359861c739e955e79d9a303bcbc70fb988958b1';
-export const WHISPER_MODELS: Record<WhisperModel, { file: string; bytes: number; sha256: string }> = {
-  'base-q5_1': { file: 'ggml-base-q5_1.bin', bytes: 59_707_625, sha256: '422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898' },
-  'small-q5_1': { file: 'ggml-small-q5_1.bin', bytes: 190_085_487, sha256: 'ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb' },
-  'large-v3-turbo-q5_0': { file: 'ggml-large-v3-turbo-q5_0.bin', bytes: 574_041_195, sha256: '394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2' },
-};
-const modelUrl = (file: string) => `https://huggingface.co/ggerganov/whisper.cpp/resolve/${WHISPER_MODEL_REVISION}/${file}?download=true`;
+export const SENSEVOICE_MODEL = { file: 'sensevoice-small-q8.gguf', bytes: 254_208_320 } as const;
+const MODEL_REVISION = '90c1c61912018b70ada0fcc024ea24aca62f2e63';
+const modelUrl = () => `https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF/resolve/${MODEL_REVISION}/${SENSEVOICE_MODEL.file}?download=true`;
 
 export const ELECTRON_RUNTIME = {
   id: 'electron',
@@ -99,12 +92,6 @@ export async function extract(archive: string, into: string): Promise<void> {
   }
 }
 
-export async function sha256File(file: string): Promise<string> {
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
-  return hash.digest('hex');
-}
-
 interface Job { state: ArtifactState; promise: Promise<void> | null }
 
 /** Tracks one runtime directory: present when its executable is found inside. */
@@ -112,7 +99,7 @@ class RuntimeSlot {
   private job: Job;
   constructor(
     private readonly root: () => string,
-    private readonly spec: typeof WHISPER_RUNTIME | typeof ELECTRON_RUNTIME,
+    private readonly spec: typeof SENSEVOICE_RUNTIME | typeof ELECTRON_RUNTIME,
     private readonly fetchImpl?: typeof fetch,
   ) {
     this.job = { state: { phase: 'absent', path: '', done: 0, total: null, detail: null }, promise: null };
@@ -176,31 +163,29 @@ class RuntimeSlot {
 /** Tracks one model file: present when the file exists at its full size. */
 class ModelSlot {
   private job: Job;
-  constructor(private readonly dir: () => string, private readonly model: WhisperModel, private readonly fetchImpl?: typeof fetch) {
+  constructor(private readonly dir: () => string, private readonly fetchImpl?: typeof fetch) {
     this.job = { state: { phase: 'absent', path: '', done: 0, total: null, detail: null }, promise: null };
   }
 
   get path(): string {
-    return join(this.dir(), WHISPER_MODELS[this.model].file);
+    return join(this.dir(), SENSEVOICE_MODEL.file);
   }
 
   state(): ArtifactState {
     if (this.job.promise) return { ...this.job.state };
-    const spec = WHISPER_MODELS[this.model];
+    const spec = SENSEVOICE_MODEL;
     if (existsSync(this.path) && statSync(this.path).size === spec.bytes) return { phase: 'ready', path: this.path, done: spec.bytes, total: spec.bytes, detail: null };
     return { ...this.job.state, phase: this.job.state.phase === 'error' ? 'error' : 'absent', path: this.path };
   }
 
   install(): Promise<void> {
     if (this.job.promise) return this.job.promise;
-    const spec = WHISPER_MODELS[this.model];
+    const spec = SENSEVOICE_MODEL;
     const partial = `${this.path}.partial`;
     this.job.state = { phase: 'working', path: this.path, done: 0, total: spec.bytes, detail: `下载 ${spec.file}` };
     const work = (async () => {
-      await downloadFile(modelUrl(spec.file), partial, { fetchImpl: this.fetchImpl, onProgress: (done, total) => { this.job.state.done = done; this.job.state.total = total ?? spec.bytes; } });
-      this.job.state.detail = '校验';
-      const sum = await sha256File(partial);
-      if (sum !== spec.sha256) throw new Error(`${spec.file} 校验不符:${sum}`);
+      await downloadFile(modelUrl(), partial, { fetchImpl: this.fetchImpl, onProgress: (done, total) => { this.job.state.done = done; this.job.state.total = total ?? spec.bytes; } });
+      if (statSync(partial).size !== spec.bytes) throw new Error(`${spec.file} 大小不符`);
       renameSync(partial, this.path);
       this.job.state = { phase: 'ready', path: this.path, done: spec.bytes, total: spec.bytes, detail: null };
     })().catch((err: Error) => {
@@ -219,21 +204,13 @@ export interface RuntimeStoreOptions {
 }
 
 export class RuntimeStore {
-  readonly whisper: RuntimeSlot;
+  readonly sensevoice: RuntimeSlot;
   readonly electron: RuntimeSlot;
-  private readonly models = new Map<WhisperModel, ModelSlot>();
+  readonly model: ModelSlot;
 
   constructor(private readonly opts: RuntimeStoreOptions) {
-    this.whisper = new RuntimeSlot(opts.runtimesRoot, WHISPER_RUNTIME, opts.fetchImpl);
+    this.sensevoice = new RuntimeSlot(opts.runtimesRoot, SENSEVOICE_RUNTIME, opts.fetchImpl);
     this.electron = new RuntimeSlot(opts.runtimesRoot, ELECTRON_RUNTIME, opts.fetchImpl);
-  }
-
-  model(id: WhisperModel): ModelSlot {
-    let slot = this.models.get(id);
-    if (!slot) {
-      slot = new ModelSlot(this.opts.modelsDir, id, this.opts.fetchImpl);
-      this.models.set(id, slot);
-    }
-    return slot;
+    this.model = new ModelSlot(opts.modelsDir, opts.fetchImpl);
   }
 }

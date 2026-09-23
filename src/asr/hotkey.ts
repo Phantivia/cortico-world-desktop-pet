@@ -3,7 +3,7 @@
  * GetAsyncKeyState through koffi. Windows only; elsewhere, or when koffi does not load,
  * `watchHotkey` returns the reason instead of a watcher.
  *
- * A hotkey is key names joined by `+` (`RightCtrl`, `Ctrl+Space`, `F8`, `Mouse4`); it is down
+ * A hotkey is key names joined by `+` (`LeftAlt`, `Ctrl+Space`, `F8`, `Mouse4`); it is down
  * while every named key is down.
  */
 
