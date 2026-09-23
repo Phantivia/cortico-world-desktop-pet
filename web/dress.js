@@ -18,6 +18,13 @@ const sfx = createSfx({ storageKey: 'cortico-pet.dress-sound.v1', volume: .35 })
 
 let skin = normalizeSkin(null);
 let theme = document.documentElement.dataset.theme;
+const appearance = new URLSearchParams(location.search).get('appearance');
+if (appearance === 'light' || appearance === 'dark') document.documentElement.dataset.uiTheme = appearance;
+window.addEventListener('message', (event) => {
+  if (event.source !== window.parent || !URL.canParse(event.origin) || new URL(event.origin).hostname !== location.hostname) return;
+  if (event.data?.type !== 'companion:appearance') return;
+  if (event.data.mode === 'light' || event.data.mode === 'dark') document.documentElement.dataset.uiTheme = event.data.mode;
+});
 const modeBtn = $('#mode');
 applyTheme(theme, modeBtn);
 const preview = $('#preview');

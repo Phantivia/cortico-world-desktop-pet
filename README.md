@@ -107,7 +107,7 @@ whisper 每句说完才出字。
 | `toggle` | 按一下说话键开始,再按一下停;中间按停顿切句 |
 | `always` | 一直收音,按停顿切句 |
 
-说话键 `asr.mic.hotkey` 默认 `RightCtrl`,用 `+` 连写组合键(`Ctrl+Space`、`F8`、`Mouse4`),在哪个窗口里按都算。
+说话键 `asr.mic.hotkey` 默认 `LeftAlt`,用 `+` 连写组合键(`Ctrl+Space`、`F8`、`Mouse4`),在哪个窗口里按都算。
 它经 koffi 轮询 Win32 `GetAsyncKeyState` 读取,只在 Windows 上可用;读不到时退回 `always`,面板上写明原因。
 `asr.mic.deviceId` 选麦克风,留空用系统默认;设备列表由桌宠页在拿到麦克风权限后报上来。
 麦克风在「开启语音输入」总开关开着时一直打开,电平条随时显示音量,说话键只决定哪一段送去识别。

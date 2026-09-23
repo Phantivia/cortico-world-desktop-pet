@@ -101,7 +101,7 @@ export const DESKTOP_PET_DEFAULTS: DesktopPetConfigSection = {
     simplified: true,
     timeoutMs: 20_000,
     segment: { thresholdDb: -42, minSpeechMs: 180, dispatchSilenceMs: 250, silenceMs: 600, maxUtteranceMs: 15_000, preRollMs: 320, minUtteranceMs: 350 },
-    mic: { mode: 'hold', hotkey: 'RightCtrl', deviceId: '' },
+    mic: { mode: 'hold', hotkey: 'LeftAlt', deviceId: '' },
   },
 };
 
