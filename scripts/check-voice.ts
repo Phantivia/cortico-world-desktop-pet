@@ -1,9 +1,9 @@
 /**
- * Manual end-to-end check of voice input against a real whisper.cpp server.
+ * Manual end-to-end check of voice input against the local SenseVoice executable.
  *
- *   npx tsx scripts/check-voice.ts <whisper-server> <ggml model> <speech.wav>
+ *   npx tsx scripts/check-voice.ts <llama-funasr-sensevoice> <GGUF model> <speech.wav>
  *
- * Mounts the World with the managed server pointed at the given files, streams the WAV
+ * Mounts the World with SenseVoice pointed at the given files, streams the WAV
  * (mono PCM16, any rate) over the pet socket in 20 ms frames, and prints the speech event.
  */
 import { readFileSync, mkdtempSync } from 'node:fs';
@@ -14,8 +14,8 @@ import { DesktopPetWorld } from '../src/world.ts';
 import { FakeHost } from '../tests/helpers/fake-host.ts';
 import { FakePage } from '../tests/helpers/page.ts';
 
-const [serverFile, modelFile, wavFile] = process.argv.slice(2);
-if (!serverFile || !modelFile || !wavFile) throw new Error('usage: check-voice.ts <whisper-server> <model> <wav>');
+const [runtimeFile, modelFile, wavFile] = process.argv.slice(2);
+if (!runtimeFile || !modelFile || !wavFile) throw new Error('usage: check-voice.ts <llama-funasr-sensevoice> <model.gguf> <wav>');
 
 function readWav(file: string): Int16Array {
   const b = readFileSync(file);
@@ -31,16 +31,16 @@ function readWav(file: string): Int16Array {
 const cfg = structuredClone(DESKTOP_PET_DEFAULTS);
 Object.assign(cfg, { enabled: true, port: 0 });
 cfg.window.enabled = false;
-cfg.asr.serverFile = serverFile;
+cfg.asr.mic.mode = 'always';
+cfg.asr.runtimeFile = runtimeFile;
 cfg.asr.modelFile = modelFile;
-cfg.asr.baseUrl = 'http://127.0.0.1:8799/v1';
 const dir = mkdtempSync(join(tmpdir(), 'pet-check-'));
 const world = new DesktopPetWorld({ cfg, timezone: 'Asia/Shanghai', persist: () => {}, runtimesRoot: () => dir, modelsDir: () => dir });
 const host = new FakeHost();
 await world.start(host);
 const t0 = Date.now();
 const st = await world.startVoiceBackend();
-console.log('server', st, `${Date.now() - t0} ms`);
+console.log('recognizer', st, `${Date.now() - t0} ms`);
 const page = await FakePage.open(world.petUrl.replace(/\/pet$/, ''));
 const pcm = readWav(wavFile);
 const frames = Math.ceil(pcm.length / 320);

@@ -11,7 +11,7 @@
 [CortiCompanion](https://github.com/Pal-AI-Lab/CortiCompanion) 桌面上的 Coo 就是它。
 
 bot 在屏幕底边有一个小身体:C 形的身体,两只 0 形的眼睛,两条短腿。它用气泡说话、用选项提问、
-沿任务栏走动、做表情和动作;人可以对它说话(默认用 Windows 自带的语音识别,也可换成 whisper.cpp)、打字、点选项、戳它、摸它、
+沿任务栏走动、做表情和动作;人可以对它说话(默认用本地 SenseVoice Small 识别)、打字、点选项、戳它、摸它、
 把它拎起来甩出去,这些都作为事件送回 bot。
 
 ## 工具
@@ -72,15 +72,14 @@ Windows 上每 0.8 秒用 GDI 取一小块身体周围的屏幕像素来比,其�
 桌宠窗口里的页面用麦克风收音,16 kHz 单声道 PCM 经 WebSocket 送到 World,按能量门限切句
 (`src/asr/segmenter.ts`),交给识别引擎,繁体转简体、挡掉已知幻觉后作为 `desktop-pet.speech` 投递。
 说话时桌宠歪头倾听,虚线气泡里显示听到的字:用 `system` 引擎时边说边出字,还没定下来的部分是灰色的;
-whisper 每句说完才出字。
+SenseVoice Small 每句说完才出字。
 
 识别引擎存在 `asr.engine`:
 
 | `asr.engine` | 引擎 |
 |---|---|
-| `auto`(默认) | Windows 上用 `system`,其他系统用 `whisper` |
+| `sensevoice`(默认) | 本地运行 SenseVoice Small GGUF 模型,首次使用需下载 |
 | `system` | Windows 自带的语音识别(SAPI 听写,System.Speech),不用下载 |
-| `whisper` | OpenAI 兼容的 `/v1/audio/transcriptions`,通常是 whisper.cpp,更准 |
 
 `system` 起一个常驻的 PowerShell 进程(`src/asr/system-sapi.ps1`,经 `-EncodedCommand` 传入,不受执行策略影响),
 一句话边说边送:切句器判定开口后(连同门限之前那几帧)每帧一行 base64 PCM 送进去,
@@ -88,16 +87,13 @@ whisper 每句说完才出字。
 按 `asr.language` 挑系统里装着的识别器。中文 Windows 自带 zh-CN 识别器;
 没有时面板写明去 Windows 设置 → 时间和语言 → 语言里装「语音识别」。
 
-`whisper`:识别端点上已经有服务在跑就直接用;没有且 `asr.manageServer` 开着,World 自己启动 whisper.cpp 的
-`whisper-server`。「语音输入」面板选了 whisper.cpp 才显示下载(点「下载并启动」也会把引擎换成 whisper):
+`sensevoice` 使用 FunASR 发布的可携带 CPU 程序。桌宠在一句结束后启动一次程序进行识别；
+程序和模型都在本机运行。「语音输入」面板提供「下载并启动」：
 
-- 程序:whisper.cpp `b5130` 的发布包(Windows x64 CPU 版 8.6 MB;Linux 用 ubuntu 包),解到
-  `<运行时根>/whisper.cpp/b5130/`。macOS 没有预编译包,用 `brew install whisper-cpp` 后把
-  `whisper-server` 填进 `asr.serverFile`;
-- 模型:`ggml-base-q5_1`(57 MB)、`ggml-small-q5_1`(181 MB,默认)、`ggml-large-v3-turbo-q5_0`(547 MB),
-  从 HuggingFace 固定 revision 下到 `<模型根>/desktop-pet/`,按仓库公布的 SHA-256 校验。
+- 程序:FunASR `v1.4.16` 的发布包,Windows x64 CPU 版约 5 MB,解到 `<运行时根>/sensevoice/v1.4.16/`；
+- 模型:`sensevoice-small-q8.gguf` 约 243 MiB,从 Hugging Face 固定 revision 下载到 `<模型根>/desktop-pet/`。
 
-下载都先写 `.partial`,完整后才改名到位。自备的程序和模型填 `asr.serverFile` / `asr.modelFile` 即可。
+下载先写 `.partial`,完整后改名到位。自备的程序和模型填 `asr.runtimeFile` / `asr.modelFile`。
 
 收音方式存在 `asr.mic`,在「语音输入」面板里改:
 
@@ -133,7 +129,7 @@ corepack pnpm build        # 面板产物 dist/,不进版本库
 ```bash
 corepack pnpm test
 corepack pnpm typecheck
-npx tsx scripts/check-voice.ts <whisper-server> <ggml 模型> <语音.wav>   # 连真 whisper.cpp 手动检查
+npx tsx scripts/check-voice.ts <llama-funasr-sensevoice> <GGUF 模型> <语音.wav>   # 连真 SenseVoice 手动检查
 ```
 
 `tsconfig.json` 与 `vitest.config.ts` 把 `cortico/*` 指到同级的框架 checkout(`../BOT/src/`);

@@ -4,17 +4,17 @@
 
 ## 识别程序
 
-whisper.cpp 的 `whisper-server`,钉在发布 `b5130`,由「语音输入」面板从
-[ggml-org/whisper.cpp releases](https://github.com/ggml-org/whisper.cpp/releases/tag/b5130) 取到
-`<运行时根>/whisper.cpp/b5130/`。MIT。
+FunASR 的 `llama-funasr-sensevoice`,钉在发布 `v1.4.16`,由「语音输入」面板从
+[modelscope/FunASR releases](https://github.com/modelscope/FunASR/releases/tag/v1.4.16) 取到
+`<运行时根>/sensevoice/v1.4.16/`。FunASR 仓库许可为 MIT；运行包包含的组件依各自许可。
 
 ## 模型
 
-放在 `<模型根>/desktop-pet/`,按固定 revision 从 HuggingFace 下载并校验 SHA-256。
+放在 `<模型根>/desktop-pet/`,按固定 revision 从 Hugging Face 下载。
 
 | 文件 | 来源 | 许可 |
 |---|---|---|
-| `ggml-base-q5_1.bin`、`ggml-small-q5_1.bin`、`ggml-large-v3-turbo-q5_0.bin` | [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp) @ `5359861` | MIT(OpenAI Whisper 权重的 ggml 转换) |
+| `sensevoice-small-q8.gguf` | [FunAudioLLM/SenseVoiceSmall-GGUF](https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF) @ `90c1c61` | Apache-2.0 |
 
 ## 桌宠窗口
 
