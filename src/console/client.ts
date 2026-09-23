@@ -211,8 +211,8 @@ const voicePanel: ConsolePanel = {
         : '已关闭:不打开麦克风,下面的设置暂不生效';
       settings.classList.toggle('off', !next.enabled);
       const engines: Record<Engine, string> = {
-        sensevoice: 'SenseVoice Small',
         system: next.systemSupported ? 'Windows 自带' : 'Windows 自带(本系统没有)',
+        sensevoice: 'SenseVoice Small',
       };
       if (engineSel.dataset.list !== JSON.stringify(engines)) {
         engineSel.dataset.list = JSON.stringify(engines);

@@ -21,8 +21,8 @@ export type PetTheme = 'dark' | 'light';
 export type TouchTrigger = 'debounce' | 'piggyback';
 /** hold: listen while the talk key is held; toggle: each press starts or stops listening; always: listen all the time. */
 export type MicMode = 'hold' | 'toggle' | 'always';
-/** SenseVoice Small is the local default; system explicitly selects Windows speech recognition. */
-export type AsrEngine = 'sensevoice' | 'system';
+/** Windows speech recognition is the default; SenseVoice Small is optional. */
+export type AsrEngine = 'system' | 'sensevoice';
 
 export interface DesktopPetConfigSection extends WorldSection {
   /** Local server for the pet page, the dressing page and the pet window's socket. */
@@ -82,7 +82,7 @@ export const DESKTOP_PET_DEFAULTS: DesktopPetConfigSection = {
   touch: { enabled: true, trigger: 'debounce' },
   asr: {
     enabled: true,
-    engine: 'sensevoice',
+    engine: 'system',
     runtimeFile: '',
     modelFile: '',
     language: 'zh',
@@ -124,7 +124,7 @@ export const DESKTOP_PET_ASR_CONFIG_GROUP: ConfigGroup = {
     title: '语音输入',
     properties: {
       [`${K}.asr.enabled`]: { type: 'boolean', title: '语音输入总开关', 'x-hot': true },
-      [`${K}.asr.engine`]: { type: 'string', title: '识别引擎', enum: ['sensevoice', 'system'], description: 'SenseVoice Small 在本机运行，需下载程序和模型；system 使用 Windows 自带的语音识别。', 'x-hot': true },
+      [`${K}.asr.engine`]: { type: 'string', title: '识别引擎', enum: ['system', 'sensevoice'], description: '默认使用 Windows 自带的语音识别；也可选 SenseVoice Small，在本机运行前需下载程序和模型。', 'x-hot': true },
       [`${K}.asr.language`]: { type: 'string', title: '系统识别语言', description: 'Windows 系统识别器使用的语言；SenseVoice 自动识别语言。', 'x-hot': true },
       [`${K}.asr.runtimeFile`]: { type: 'string', title: 'SenseVoice 程序', description: '留空使用面板里安装的运行时。', 'x-path': { kind: 'file' }, 'x-hot': false },
       [`${K}.asr.modelFile`]: { type: 'string', title: 'SenseVoice 模型', description: '留空使用面板里下载的 GGUF 模型。', 'x-path': { kind: 'file', extensions: ['.gguf'] }, 'x-hot': false },

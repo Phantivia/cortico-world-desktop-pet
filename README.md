@@ -11,7 +11,7 @@
 [CortiCompanion](https://github.com/Pal-AI-Lab/CortiCompanion) 桌面上的 Coo 就是它。
 
 bot 在屏幕底边有一个小身体:C 形的身体,两只 0 形的眼睛,两条短腿。它用气泡说话、用选项提问、
-沿任务栏走动、做表情和动作;人可以对它说话(默认用本地 SenseVoice Small 识别)、打字、点选项、戳它、摸它、
+沿任务栏走动、做表情和动作;人可以对它说话(默认用 Windows 自带识别器,也能选 SenseVoice Small)、打字、点选项、戳它、摸它、
 把它拎起来甩出去,这些都作为事件送回 bot。
 
 ## 工具
@@ -78,8 +78,8 @@ SenseVoice Small 每句说完才出字。
 
 | `asr.engine` | 引擎 |
 |---|---|
-| `sensevoice`(默认) | 本地运行 SenseVoice Small GGUF 模型,首次使用需下载 |
-| `system` | Windows 自带的语音识别(SAPI 听写,System.Speech),不用下载 |
+| `system`(默认) | Windows 自带的语音识别(SAPI 听写,System.Speech),不用下载 |
+| `sensevoice` | 本地运行 SenseVoice Small GGUF 模型,首次使用需下载 |
 
 `system` 起一个常驻的 PowerShell 进程(`src/asr/system-sapi.ps1`,经 `-EncodedCommand` 传入,不受执行策略影响),
 一句话边说边送:切句器判定开口后(连同门限之前那几帧)每帧一行 base64 PCM 送进去,

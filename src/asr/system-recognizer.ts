@@ -5,7 +5,7 @@
  * shows what it hears before the sentence ends.
  *
  * Nothing to download: every Windows has System.Speech, and a Chinese Windows has the zh-CN
- * recognizer. SenseVoice Small is the local default when model files are installed.
+ * recognizer. SenseVoice Small is available as an optional engine.
  *
  * The script goes in through `-EncodedCommand`, so neither the execution policy nor the
  * console code page touches it; its output escapes everything outside ASCII for the same reason.
